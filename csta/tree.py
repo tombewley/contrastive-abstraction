@@ -674,40 +674,7 @@ class Tree:
             (graph,) = pydot.graph_from_dot_data(graph_spec+'}') 
             if out_name[-4:] == ".png":   graph.write_png(out_name) 
             elif out_name[-4:] == ".svg": graph.write_svg(out_name)
-            else: raise Exception("Invalid file extension.") 
-
-    def bb_desc(self, i, sf=3, keep_all=False): 
-        """Describe the bounding box for one abstract state."""
-        if i >= self.m: assert i == self.m; return "terminal"
-        if self.dim_names: dim_names = self.dim_names
-        else: dim_names = [f"s{j}" for j in range(self.D.shape[1])]
-        terms = []
-        for j, (mn, mx) in enumerate(self.leaves[i].bb):
-            do_mn = mn > -np.inf; do_mx = mx < np.inf
-            if do_mn and do_mx:
-                terms.append(f"{round_sf(mn, sf)} =< {dim_names[j]} < {round_sf(mx, sf)}")
-            elif do_mn or do_mx:
-                if do_mn: terms.append(f"{dim_names[j]} >= {round_sf(mn, sf)}")
-                if do_mx: terms.append(f"{dim_names[j]} < {round_sf(mx, sf)}")
-            elif keep_all: terms.append("any")
-        return " and ".join(terms)
-
-    def transition_desc(self, i1, i2, sf=3, refactor=True):
-        """Describe a transition via the source and destination bounding boxes."""
-        b2 = self.bb_desc(i2, sf)
-        if b2 == "terminal": return f"({self.bb_desc(i1, sf, keep_all=True)}) to {b2}"
-        if not refactor: return f"({self.bb_desc(i1, sf, keep_all=True)}) to ({b2})"
-        diff_terms, same_terms = [], []
-        for b1, b2 in zip(self.bb_desc(i1, sf, keep_all=True).split(" and "), self.bb_desc(i2, sf, keep_all=True).split(" and ")):
-            if b1 == b2:
-                if b1 != "any": same_terms.append(b1)
-            else: diff_terms.append(f"({b1} to {b2})")
-        return " and ".join(diff_terms) + (" while " + " and ".join(same_terms) if same_terms else "")
-
-    def prob_change_desc(self, i1, p1, p2, i2=None, sf=3, refactor=True):
-        if i2 is not None: desc, prob1, prob2 = self.transition_desc(i1, i2, sf, refactor), self.P[i1,i2,p1],   self.P[i1,i2,p2]
-        else:              desc, prob1, prob2 = self.bb_desc(i1, sf),                       self.P[i1,:,p1].sum(), self.P[i1,:,p2].sum()
-        return desc + f": {round_sf(prob1, sf)} to {round_sf(prob2, sf)}"
+            else: raise Exception("Invalid file extension.")
 
 # ============================================================================
 # EXPORT

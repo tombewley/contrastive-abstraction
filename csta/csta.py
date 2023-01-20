@@ -55,16 +55,21 @@ class ContrastiveAbstraction:
             window.split(0, threshold)
             window = window.right
 
-    def eval_splits(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
-                    by_context: bool = False, debug: bool = False):
+    def eval_changes(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
+                     context_split: bool = False, context_merge: bool = False,
+                     state_split: bool = False, state_merge: bool = False,
+                     debug: bool = False):
         n, m = self.n, self.m
+        context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = None, None, None, None
+        # Propagate the dataset through the extant abstractions and compute JSD as a baseline
         mask_current = self.transition_mask(contexts, states, next_states)
         counts_current = mask_current.sum(axis=3)
         jsd_current = jsd(counts_current)
-        if by_context:
-            assert m > 1, "Contextual abstraction requires at least two abstract states."
+        if context_split or context_merge:
             w_mask_current = mask_current.sum(axis=(1, 2)).astype(bool)
-            gains = [[] for _ in range(n)]
+        if context_split:
+            assert m > 1, "Context splitting requires at least two abstract states."
+            context_split_gains = [[] for _ in range(n)]
             for w in range(n):
                 bounds = data_bounds(contexts[w_mask_current[w]])
                 # Define expanded mask and counts arrays
@@ -84,21 +89,22 @@ class ContrastiveAbstraction:
                         delta[c, w + 1] += delta_w
                         assert (delta[c].sum(axis=0) == 0).all()
                     # Record Jensen-Shannon divergence for each valid threshold
-                    gains[w].append((valid_thresholds, _jsd(counts_exp + delta) - jsd_current))
+                    context_split_gains[w].append((valid_thresholds, _jsd(counts_exp + delta) - jsd_current))
                     # Check that computed counts match that after split is made
                     if debug and len(valid_thresholds) > 0:
-                        greedy = np.argmax(gains[w][-1][1])
+                        greedy = np.argmax(context_split_gains[w][-1][1])
                         parent = self.W.leaves[w]
                         parent.split(dim, valid_thresholds[greedy])
                         match = (self.transition_mask(contexts, states, next_states).sum(axis=3)
                                  == (counts_exp + delta[greedy])).all()
                         assert match
                         parent.merge()
-        else:
-            assert n > 1, "Spatial abstraction requires at least two context windows."
+        if state_split or state_merge:
             x_mask_current = mask_current.sum(axis=(0, 2)).astype(bool)
             xx_mask_current = mask_current.sum(axis=(0, 1)).astype(bool)
-            gains = [[] for _ in range(m)]
+        if state_split:
+            assert n > 1, "State splitting requires at least two context windows."
+            state_split_gains = [[] for _ in range(m)]
             for x in range(m):
                 bounds = data_bounds(states[x_mask_current[x]], next_states[xx_mask_current[x]])
                 # Define expanded mask and counts arrays
@@ -132,27 +138,27 @@ class ContrastiveAbstraction:
                         delta[c, :, x + 1, x + 1] += delta_both
                         assert (delta[c].sum(axis=(1, 2)) == 0).all()
                     # Record Jensen-Shannon divergence for each valid threshold
-                    gains[x].append((valid_thresholds, _jsd(counts_exp + delta) - jsd_current))
+                    state_split_gains[x].append((valid_thresholds, _jsd(counts_exp + delta) - jsd_current))
                     # Check that computed counts match that after split is made
                     if debug and len(valid_thresholds) > 0:
-                        greedy = np.argmax(gains[x][-1][1])
+                        greedy = np.argmax(state_split_gains[x][-1][1])
                         parent = self.X.leaves[x]
                         parent.split(dim, valid_thresholds[greedy])
                         match = (self.transition_mask(contexts, states, next_states).sum(axis=3)
                                  == (counts_exp + delta[greedy])).all()
                         assert match
                         parent.merge()
-        return gains
-
-    def eval_merges(self):
-        """MCCP"""
+        return context_split_gains, context_merge_gains, state_split_gains, state_merge_gains
 
     def make_greedy_change(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
                            alpha: float = 0., beta: float = 0., tau: float = 0.):
         n, m = self.n, self.m
+        context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = self.eval_changes(
+            contexts, states, next_states,
+            context_split=(m > 1), state_split=(n > 1)
+        )
         candidates, quals = [], []
         if m > 1:
-            context_split_gains = self.eval_splits(contexts, states, next_states, by_context=True)
             for w in range(self.n):
                 for dim in range(self.d_c):
                     g = context_split_gains[w][dim]
@@ -163,7 +169,6 @@ class ContrastiveAbstraction:
                             candidates.append(("context split", w, dim, g[0][greedy]))
                             quals.append(qual)
         if n > 1:
-            state_split_gains = self.eval_splits(contexts, states, next_states, by_context=False)
             for x in range(self.m):
                 for dim in range(self.d_s):
                     g = state_split_gains[x][dim]

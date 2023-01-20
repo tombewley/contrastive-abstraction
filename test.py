@@ -1,9 +1,13 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
+import os, psutil
 
 from csta.csta import ContrastiveAbstraction, jsd
 
+
+np.set_printoptions(suppress=True, precision=3)
+process = psutil.Process(os.getpid())
 
 df = pd.read_csv(f"data/maze-RL.csv")
 t = df["time"].values
@@ -23,19 +27,40 @@ model = ContrastiveAbstraction(
 
 fig = plt.figure()
 ax = plt.axes(projection="3d")
-
-model.X.merge()
-model.set_1d_context_windows(375)
-history = []
-for _ in range(10):
-    model.make_greedy_change(contexts, states, next_states, alpha=0., beta=0., tau=0.)
-    history.append((model.n, model.m,
-                    jsd(model.transition_mask(contexts, states, next_states).sum(axis=3))[0]))
-
-ax.plot3D(*np.array(history).T, c="g")
 ax.set_xlabel("Number of context windows")
 ax.set_ylabel("Number of abstract states")
 ax.set_zlabel("Jensen-Shannon divergence")
+
+alpha = 0.01
+beta = 0.02
+
+for batch_size in (len(states), ):
+
+    model.X.merge()
+    model.set_1d_context_windows(375)
+    history = []
+    for i in range(200):
+        print(process.memory_info().rss / 1048576, "MB")
+        batch = np.random.choice(len(states), size=batch_size, replace=False)
+
+        candidates = model.make_greedy_change(contexts[batch], states[batch], next_states[batch],
+                                              alpha=alpha, beta=beta, tau=0.)
+        if len(candidates) == 0: break
+        history.append((model.n, model.m,
+                        jsd(model.transition_mask(contexts, states, next_states).sum(axis=3))[0]))
+        print(i, history[-1])
+
+    ax.plot3D(*np.array(history).T, label=batch_size)
+
+for x in model.X.leaves:
+    print(x)
+
+N = model.transition_mask(contexts, states, next_states).sum(axis=3)
+P = N / N.sum(axis=(1, 2), keepdims=True)
+print(N)
+print(P)
+
+plt.legend()
 
 # num_axes = len(gains)
 # num_rows = int(np.sqrt(num_axes))

@@ -64,11 +64,10 @@ class ContrastiveAbstraction:
         # Propagate the dataset through the extant abstractions and compute JSD as a baseline
         mask_current = self.transition_mask(contexts, states, next_states)
         counts_current = mask_current.sum(axis=3)
-        jsd_current = jsd(counts_current)
-        if context_split or context_merge:
-            w_mask_current = mask_current.sum(axis=(1, 2)).astype(bool)
+        jsd_current = jsd(counts_current)[0]
         if context_split:
             assert m > 1, "Context splitting requires at least two abstract states."
+            w_mask_current = mask_current.sum(axis=(1, 2)).astype(bool)
             context_split_gains = [[] for _ in range(n)]
             for w in range(n):
                 bounds = data_bounds(contexts[w_mask_current[w]])
@@ -99,11 +98,22 @@ class ContrastiveAbstraction:
                                  == (counts_exp + delta[greedy])).all()
                         assert match
                         parent.merge()
-        if state_split or state_merge:
-            x_mask_current = mask_current.sum(axis=(0, 2)).astype(bool)
-            xx_mask_current = mask_current.sum(axis=(0, 1)).astype(bool)
+        if context_merge:
+            assert n > 1, "Context merging requires at least two windows."
+            context_merge_gains = []
+            transition_sums = counts_current.sum(axis=0)
+            for parent, ws in self.W.merge_sets:
+                # Merge counts along window axis
+                counts_merged = np.concatenate([counts_current[:ws[0]],
+                                                counts_current[ws].sum(axis=0, keepdims=True),
+                                                counts_current[ws[-1] + 1:]], axis=0)
+                assert (counts_merged.sum(axis=0) == transition_sums).all()
+                # Record Jensen-Shannon divergence for each merge set
+                context_merge_gains.append((parent, ws, jsd(counts_merged)[0] - jsd_current))
         if state_split:
             assert n > 1, "State splitting requires at least two context windows."
+            x_mask_current = mask_current.sum(axis=(0, 2)).astype(bool)
+            xx_mask_current = mask_current.sum(axis=(0, 1)).astype(bool)
             state_split_gains = [[] for _ in range(m)]
             for x in range(m):
                 bounds = data_bounds(states[x_mask_current[x]], next_states[xx_mask_current[x]])
@@ -148,14 +158,31 @@ class ContrastiveAbstraction:
                                  == (counts_exp + delta[greedy])).all()
                         assert match
                         parent.merge()
+        if state_merge:
+            assert m > 1, "State merging requires at least two abstract states."
+            state_merge_gains = []
+            window_sums = counts_current.sum(axis=(1, 2))
+            for parent, xs in self.X.merge_sets:
+                # Merge counts along first state axis
+                counts_merged = np.concatenate([counts_current[:, :xs[0]],
+                                                counts_current[:, xs].sum(axis=1, keepdims=True),
+                                                counts_current[:, xs[-1] + 1:]], axis=1)
+                # Merge counts along second state axis
+                counts_merged = np.concatenate([counts_merged[:, :, :xs[0]],
+                                                counts_merged[:, :, xs].sum(axis=2, keepdims=True),
+                                                counts_merged[:, :, xs[-1] + 1:]], axis=2)
+                assert (counts_merged.sum(axis=(1, 2)) == window_sums).all()
+                # Record Jensen-Shannon divergence for each merge set
+                state_merge_gains.append((parent, xs, jsd(counts_merged)[0] - jsd_current))
         return context_split_gains, context_merge_gains, state_split_gains, state_merge_gains
 
     def make_greedy_change(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
-                           alpha: float = 0., beta: float = 0., tau: float = 0.):
+                           alpha: float = 0., beta: float = 0., power: float = 1., tau: float = 0.):
         n, m = self.n, self.m
         context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = self.eval_changes(
             contexts, states, next_states,
-            context_split=(m > 1), state_split=(n > 1)
+            context_split=(m > 1), state_split=(n > 1),
+            context_merge=(m > 1 and n > 1), state_merge=(m > 1 and n > 1),
         )
         candidates, quals = [], []
         if m > 1:
@@ -164,7 +191,7 @@ class ContrastiveAbstraction:
                     g = context_split_gains[w][dim]
                     if len(g[1]) > 0:
                         greedy = np.argmax(g[1])
-                        qual = g[1][greedy] - beta
+                        qual = g[1][greedy] - beta * ((n + 1)**power - n**power)
                         if qual > 0:
                             candidates.append(("context split", w, dim, g[0][greedy]))
                             quals.append(qual)
@@ -174,12 +201,23 @@ class ContrastiveAbstraction:
                     g = state_split_gains[x][dim]
                     if len(g[1]) > 0:
                         greedy = np.argmax(g[1])
-                        qual = g[1][greedy] - alpha
+                        qual = g[1][greedy] - alpha * ((m + 1)**power - m**power)
                         if qual > 0:
                             candidates.append(("state split", x, dim, g[0][greedy]))
                             quals.append(qual)
+        if m > 1 and n > 1:
+            for parent, ws, gain in context_merge_gains:
+                qual = gain - beta * ((n + 1 - len(ws))**power - n**power)
+                if qual > 0:
+                    candidates.append(("context merge", parent, ws))
+                    quals.append(qual)
+            for parent, xs, gain in state_merge_gains:
+                qual = gain - alpha * ((m + 1 - len(xs))**power - m**power)
+                if qual > 0:
+                    candidates.append(("state merge", parent, xs))
+                    quals.append(qual)
         if len(candidates) == 0:
-            print("Local optimum reached")
+            print(f"(n={self.n}, m={self.m}) No change; at local optimum")
         else:
             if tau > 0:
                 chosen = np.random.choice(np.arange(len(candidates)), p=softmax(np.array(quals), tau=tau))
@@ -187,12 +225,20 @@ class ContrastiveAbstraction:
                 chosen = np.argmax(quals)
             if candidates[chosen][0] == "context split":
                 _, w, dim, threshold = candidates[chosen]
-                print(f"Split window {w} at dim {dim} = {threshold}")
                 self.W.leaves[w].split(dim, threshold)
+                print(f"(n={self.n}, m={self.m}) Split window {w} at dim {dim} = {threshold}")
+            elif candidates[chosen][0] == "context merge":
+                _, parent, ws = candidates[chosen]
+                parent.merge()
+                print(f"(n={self.n}, m={self.m}) Merge windows {ws}")
             elif candidates[chosen][0] == "state split":
                 _, x, dim, threshold = candidates[chosen]
-                print(f"Split abstract state {x} at dim {dim} = {threshold}")
                 self.X.leaves[x].split(dim, threshold)
+                print(f"(n={self.n}, m={self.m}) Split abstract state {x} at dim {dim} = {threshold}")
+            elif candidates[chosen][0] == "state merge":
+                _, parent, xs = candidates[chosen]
+                parent.merge()
+                print(f"(n={self.n}, m={self.m}) Merge abstract states {xs}")
         return candidates
 
 
@@ -219,6 +265,17 @@ class HRSubset:
             return [self]
         return self.left.leaves + self.right.leaves
 
+    @property
+    def merge_sets(self):
+        leaves = self.leaves
+        merge_sets_ = []
+        def _recurse(subset):
+            if subset.is_leaf: return
+            merge_sets_.append((subset, np.array([leaves.index(l) for l in subset.leaves])))
+            _recurse(subset.left); _recurse(subset.right)
+        _recurse(self)
+        return merge_sets_
+
     def sort(self, data: np.ndarray):
         assert not self.is_leaf, "Subset hasn't been split."
         return data[..., self.split_dim] >= self.split_threshold
@@ -240,6 +297,8 @@ class HRSubset:
 
 def data_bounds(*data):
     data = np.concatenate(data)
+    if data.shape[0] == 0:
+        return np.array([np.full(data.shape[1], -np.inf), np.full(data.shape[1], np.inf)])
     return np.array([data.min(axis=0), data.max(axis=0)])
 
 

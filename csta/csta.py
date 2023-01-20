@@ -2,37 +2,37 @@ import numpy as np
 import numba
 
 
-class CSTA:
+class ContrastiveAbstraction:
     """
-    Class for performing contrastive spatiotemporal abstraction.
+    Class for performing contrastive abstraction of context-labelled state transition data.
     """
-    def __init__(self, temporal_dims: list[str], temporal_split_thresholds: list[np.ndarray],
-                 spatial_dims: list[str], spatial_split_thresholds: list[np.ndarray]):
-        assert len(temporal_split_thresholds) == len(temporal_dims), "Must specify split thresholds for every dim."
-        assert len(spatial_split_thresholds) == len(spatial_dims), "Must specify split thresholds for every dim."
-        self.T = HRSubset(dims=temporal_dims)
-        self.temporal_split_thresholds = temporal_split_thresholds
-        self.X = HRSubset(dims=spatial_dims)
-        self.spatial_split_thresholds = spatial_split_thresholds
+    def __init__(self, context_dims: list[str], context_split_thresholds: list[np.ndarray],
+                 state_dims: list[str], state_split_thresholds: list[np.ndarray]):
+        assert len(context_split_thresholds) == len(context_dims), "Must specify split thresholds for every dim."
+        assert len(state_split_thresholds) == len(state_dims), "Must specify split thresholds for every dim."
+        self.W = HRSubset(dims=context_dims)
+        self.context_split_thresholds = context_split_thresholds
+        self.X = HRSubset(dims=state_dims)
+        self.state_split_thresholds = state_split_thresholds
 
     @property
-    def n(self): return len(self.T.leaves)
+    def n(self): return len(self.W.leaves)
     @property
     def m(self): return len(self.X.leaves)
     @property
-    def d_t(self): return len(self.T.dims)
+    def d_c(self): return len(self.W.dims)
     @property
     def d_s(self): return len(self.X.dims)
 
-    def transition_mask(self, timestamps: np.ndarray, states: np.ndarray, next_states: np.ndarray):
-        num = timestamps.shape[0]
+    def transition_mask(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray):
+        num = contexts.shape[0]
         assert states.shape[0] == next_states.shape[0] == num, "Arrays must have common length."
-        l_T, l_X = self.T.leaves, self.X.leaves
-        mask = np.zeros((len(l_T), len(l_X), len(l_X), num), dtype=np.bool_)
+        l_W, l_X = self.W.leaves, self.X.leaves
+        mask = np.zeros((len(l_W), len(l_X), len(l_X), num), dtype=np.bool_)
         def _recurse(w, x, xx, indices):
             w_l = w_r = w; x_l = x_r = x; xx_l = xx_r = xx
             if not w.is_leaf:
-                right = w.sort(timestamps[indices])
+                right = w.sort(contexts[indices])
                 w_l, w_r = w.left, w.right
             elif not x.is_leaf:
                 right = x.sort(states[indices])
@@ -41,46 +41,74 @@ class CSTA:
                 right = xx.sort(next_states[indices])
                 xx_l, xx_r = xx.left, xx.right
             else:
-                mask[l_T.index(w), l_X.index(x), l_X.index(xx), indices] = True
+                mask[l_W.index(w), l_X.index(x), l_X.index(xx), indices] = True
                 return
             _recurse(w_l, x_l, xx_l, indices[~right])
             _recurse(w_r, x_r, xx_r, indices[ right])
-        _recurse(self.T, self.X, self.X, np.arange(num))
+        _recurse(self.W, self.X, self.X, np.arange(num))
         return mask
 
-    def set_windows(self, *thresholds):
-        self.T.merge()
-        leaf = self.T
+    def set_1d_context_windows(self, *thresholds):
+        self.W.merge()
+        window = self.W
         for threshold in sorted(thresholds):
-            leaf.split(0, threshold)
-            leaf = leaf.right
+            window.split(0, threshold)
+            window = window.right
 
-    def eval_splits(self, timestamps: np.ndarray, states: np.ndarray, next_states: np.ndarray,
-                    temporal: bool = False, debug: bool = False):
+    def eval_splits(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
+                    by_context: bool = False, debug: bool = False):
         n, m = self.n, self.m
-        mask_current = self.transition_mask(timestamps, states, next_states)
+        mask_current = self.transition_mask(contexts, states, next_states)
         counts_current = mask_current.sum(axis=3)
         jsd_current = jsd(counts_current)
-        if temporal:
-            assert m > 1, "Temporal abstraction requires at least two abstract states."
+        if by_context:
+            assert m > 1, "Contextual abstraction requires at least two abstract states."
             w_mask_current = mask_current.sum(axis=(1, 2)).astype(bool)
-            gains = []
-            raise NotImplementedError
+            gains = [[] for _ in range(n)]
+            for w in range(n):
+                bounds = data_bounds(contexts[w_mask_current[w]])
+                # Define expanded mask and counts arrays
+                mask_exp = np.insert(mask_current, w + 1, 0, axis=0)
+                counts_exp = np.insert(counts_current, w + 1, 0, axis=0)
+                for dim in range(self.d_c):
+                    # Valid thresholds are those that lie within the bounds of the observations in this window
+                    th = self.context_split_thresholds[dim]
+                    valid_thresholds = th[np.logical_and(bounds[0, dim] < th, th < bounds[1, dim])]
+                    # Compare all context values to all valid thresholds in parallel
+                    move = geq_threshold_mask(contexts, w_mask_current[w], dim, valid_thresholds)
+                    delta = np.zeros((len(valid_thresholds), n + 1, m, m), dtype=np.int_)
+                    for c in range(len(valid_thresholds)):
+                        # Handle transitions where the context is in the right child
+                        delta_w = mask_exp[w, :, :, move[c]].sum(axis=0)
+                        delta[c, w] -= delta_w
+                        delta[c, w + 1] += delta_w
+                        assert (delta[c].sum(axis=0) == 0).all()
+                    # Record Jensen-Shannon divergence for each valid threshold
+                    gains[w].append((valid_thresholds, _jsd(counts_exp + delta) - jsd_current))
+                    # Check that computed counts match that after split is made
+                    if debug and len(valid_thresholds) > 0:
+                        greedy = np.argmax(gains[w][-1][1])
+                        parent = self.W.leaves[w]
+                        parent.split(dim, valid_thresholds[greedy])
+                        match = (self.transition_mask(contexts, states, next_states).sum(axis=3)
+                                 == (counts_exp + delta[greedy])).all()
+                        assert match
+                        parent.merge()
         else:
-            assert n > 1, "Spatial abstraction requires at least two time windows."
+            assert n > 1, "Spatial abstraction requires at least two context windows."
             x_mask_current = mask_current.sum(axis=(0, 2)).astype(bool)
             xx_mask_current = mask_current.sum(axis=(0, 1)).astype(bool)
             gains = [[] for _ in range(m)]
             for x in range(m):
-                bounds = self.X.leaves[x].bounds
+                bounds = data_bounds(states[x_mask_current[x]], next_states[xx_mask_current[x]])
                 # Define expanded mask and counts arrays
                 mask_exp = np.insert(mask_current, x + 1, 0, axis=1)
                 mask_exp = np.insert(mask_exp, x + 1, 0, axis=2)
                 counts_exp = np.insert(counts_current, x + 1, 0, axis=1)
                 counts_exp = np.insert(counts_exp, x + 1, 0, axis=2)
                 for dim in range(self.d_s):
-                    # Valid thresholds are those that lie within the bounds of this leaf
-                    th = self.spatial_split_thresholds[dim]
+                    # Valid thresholds are those that lie within the bounds of the observations in this abstract state
+                    th = self.state_split_thresholds[dim]
                     valid_thresholds = th[np.logical_and(bounds[0, dim] < th, th < bounds[1, dim])]
                     # Compare all state values to all valid thresholds in parallel
                     move_x = geq_threshold_mask(states, x_mask_current[x], dim, valid_thresholds)
@@ -89,7 +117,7 @@ class CSTA:
                     move_x_only = np.logical_and(move_x, ~move_xx)
                     move_xx_only = np.logical_and(~move_x, move_xx)
                     delta = np.zeros((len(valid_thresholds), n, m + 1, m + 1), dtype=np.int_)
-                    for c in numba.prange(len(valid_thresholds)):
+                    for c in range(len(valid_thresholds)):
                         # Handle transitions where the first state is in the right child
                         delta_x_only = mask_exp[:, x, :, move_x_only[c]].sum(axis=0)
                         delta[c, :, x, :] -= delta_x_only
@@ -106,12 +134,11 @@ class CSTA:
                     # Record Jensen-Shannon divergence for each valid threshold
                     gains[x].append((valid_thresholds, _jsd(counts_exp + delta) - jsd_current))
                     # Check that computed counts match that after split is made
-                    if debug:
+                    if debug and len(valid_thresholds) > 0:
                         greedy = np.argmax(gains[x][-1][1])
-                        print(f"greedy: leaf {x}, {dim} = {valid_thresholds[greedy]} (JSD = {gains[x][-1][1][greedy]})")
                         parent = self.X.leaves[x]
                         parent.split(dim, valid_thresholds[greedy])
-                        match = (self.transition_mask(timestamps, states, next_states).sum(axis=3)
+                        match = (self.transition_mask(contexts, states, next_states).sum(axis=3)
                                  == (counts_exp + delta[greedy])).all()
                         assert match
                         parent.merge()
@@ -120,29 +147,48 @@ class CSTA:
     def eval_merges(self):
         """MCCP"""
 
-    def make_greedy_change(self, timestamps: np.ndarray, states: np.ndarray, next_states: np.ndarray):
-
-        alpha = 0.
-
-        spatial_split_gains = self.eval_splits(timestamps, states, next_states, temporal=False)
-        candidates = {}
-        for x in range(self.m):
-            for dim in range(self.d_s):
-                g = spatial_split_gains[x][dim]
-                greedy = np.argmax(g[1])
-                qual = g[1][greedy] - alpha
-                if qual > 0:
-                    candidates[(x, dim, g[0][greedy])] = qual
-
+    def make_greedy_change(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
+                           alpha: float = 0., beta: float = 0., tau: float = 0.):
+        n, m = self.n, self.m
+        candidates, quals = [], []
+        if m > 1:
+            context_split_gains = self.eval_splits(contexts, states, next_states, by_context=True)
+            for w in range(self.n):
+                for dim in range(self.d_c):
+                    g = context_split_gains[w][dim]
+                    if len(g[1]) > 0:
+                        greedy = np.argmax(g[1])
+                        qual = g[1][greedy] - beta
+                        if qual > 0:
+                            candidates.append(("context split", w, dim, g[0][greedy]))
+                            quals.append(qual)
+        if n > 1:
+            state_split_gains = self.eval_splits(contexts, states, next_states, by_context=False)
+            for x in range(self.m):
+                for dim in range(self.d_s):
+                    g = state_split_gains[x][dim]
+                    if len(g[1]) > 0:
+                        greedy = np.argmax(g[1])
+                        qual = g[1][greedy] - alpha
+                        if qual > 0:
+                            candidates.append(("state split", x, dim, g[0][greedy]))
+                            quals.append(qual)
         if len(candidates) == 0:
             print("Local optimum reached")
         else:
-            key = max(candidates, key=candidates.get)
-            x, dim, threshold = key
-            print(f"Split abstract state {x} at dim {dim} = {threshold}")
-            self.X.leaves[x].split(dim, threshold)
-
-        return spatial_split_gains
+            if tau > 0:
+                chosen = np.random.choice(np.arange(len(candidates)), p=softmax(np.array(quals), tau=tau))
+            else:
+                chosen = np.argmax(quals)
+            if candidates[chosen][0] == "context split":
+                _, w, dim, threshold = candidates[chosen]
+                print(f"Split window {w} at dim {dim} = {threshold}")
+                self.W.leaves[w].split(dim, threshold)
+            elif candidates[chosen][0] == "state split":
+                _, x, dim, threshold = candidates[chosen]
+                print(f"Split abstract state {x} at dim {dim} = {threshold}")
+                self.X.leaves[x].split(dim, threshold)
+        return candidates
 
 
 class HRSubset:
@@ -187,6 +233,11 @@ class HRSubset:
         self.right = HRSubset(self.dims, bounds_right)
 
 
+def data_bounds(*data):
+    data = np.concatenate(data)
+    return np.array([data.min(axis=0), data.max(axis=0)])
+
+
 @numba.jit(nopython=True, cache=True, parallel=True)
 def geq_threshold_mask(data: np.ndarray, init_mask: np.ndarray, dim: int, thresholds: np.ndarray):
     mask = np.zeros((thresholds.shape[0], data.shape[0]), dtype=np.bool_)
@@ -211,3 +262,10 @@ def _jsd(counts: np.ndarray):
     counts_mixed = counts.sum(axis=1)
     h_mixed = entropy(counts_mixed / counts_mixed.sum(axis=-1).reshape(r, 1))
     return h_mixed - (h_unmixed * counts_total / counts_total.sum(axis=-1).reshape(r, 1)).sum(axis=-1)
+
+
+@numba.jit(nopython=True, cache=True)
+def softmax(x, tau):
+    x = x / tau
+    x = x - x.max()  # For stability
+    return np.exp(x) / np.exp(x).sum()

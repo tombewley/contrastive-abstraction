@@ -1,5 +1,7 @@
 import numpy as np
 from numba import jit
+from itertools import chain, combinations
+from math import factorial
 
 
 def data_bounds(*data):
@@ -40,3 +42,24 @@ def softmax(x, tau):
     x = x / tau
     x = x - x.max()  # For stability
     return np.exp(x) / np.exp(x).sum()
+
+
+def powerset(iterable):
+    s = list(iterable)
+    return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
+
+
+def shapley(v: dict):
+    contrib = {}
+    for xs in v:
+        for i, x in enumerate(xs):
+            other_xs = xs - {x}
+            if x not in contrib:
+                contrib[x] = dict()
+            contrib[x][other_xs] = v[xs] - v[other_xs]
+    n = len(contrib)
+    n_fact = factorial(n)
+    w = [factorial(i) * factorial(n - i - 1) / n_fact for i in range(0, n)]
+    return {x: sum(w[len(other_xs)] * con              # weighted sum of contributions...
+                   for other_xs, con in cont.items())  # starting from each coalition of other features...
+            for x, cont in contrib.items()}            # for each feature

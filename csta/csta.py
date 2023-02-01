@@ -1,5 +1,5 @@
 import numpy as np
-import numba
+from .utils import data_bounds, geq_threshold_mask, jsd, softmax
 
 
 class ContrastiveAbstraction:
@@ -91,7 +91,7 @@ class ContrastiveAbstraction:
                         delta[c, w + 1] += delta_w
                         assert (delta[c].sum(axis=0) == 0).all()
                     # Record Jensen-Shannon divergence for each valid threshold
-                    context_split_gains[w].append((valid_thresholds, _jsd(counts_exp + delta) - jsd_current))
+                    context_split_gains[w].append((valid_thresholds, jsd(counts_exp + delta) - jsd_current))
                     # Check that computed counts match that after split is made
                     if debug and len(valid_thresholds) > 0:
                         greedy = np.argmax(context_split_gains[w][-1][1])
@@ -151,7 +151,7 @@ class ContrastiveAbstraction:
                         delta[c, :, x + 1, x + 1] += delta_both
                         assert (delta[c].sum(axis=(1, 2)) == 0).all()
                     # Record Jensen-Shannon divergence for each valid threshold
-                    state_split_gains[x].append((valid_thresholds, _jsd(counts_exp + delta) - jsd_current))
+                    state_split_gains[x].append((valid_thresholds, jsd(counts_exp + delta) - jsd_current))
                     # Check that computed counts match that after split is made
                     if debug and len(valid_thresholds) > 0:
                         greedy = np.argmax(state_split_gains[x][-1][1])
@@ -256,7 +256,8 @@ class HRSubset:
         self.merge()
 
     def __repr__(self):
-        return "(" + " and ".join([f"{l} <= {dim} < {u}" for dim, (l, u) in zip(self.dims, self.bounds.T)]) + ")"
+        return " and ".join([("" if np.isinf(l) else f"{l:.2f}<=") + dim + ("" if np.isinf(u) else f"<{u:.2f}")
+                             for dim, (l, u) in zip(self.dims, self.bounds.T) if not (np.isinf(l) and np.isinf(u))])
 
     @property
     def is_leaf(self):
@@ -296,43 +297,3 @@ class HRSubset:
         bounds_left[1, dim] = bounds_right[0, dim] = threshold
         self.left = HRSubset(self.dims, bounds_left)
         self.right = HRSubset(self.dims, bounds_right)
-
-
-def data_bounds(*data):
-    data = np.concatenate(data)
-    if data.shape[0] == 0:
-        return np.array([np.full(data.shape[1], -np.inf), np.full(data.shape[1], np.inf)])
-    return np.array([data.min(axis=0), data.max(axis=0)])
-
-
-@numba.jit(nopython=True, cache=True, parallel=True)
-def geq_threshold_mask(data: np.ndarray, init_mask: np.ndarray, dim: int, thresholds: np.ndarray):
-    mask = np.zeros((thresholds.shape[0], data.shape[0]), dtype=np.bool_)
-    mask[:, init_mask] = data[init_mask, dim].copy().reshape(1, -1) >= thresholds.reshape(-1, 1)
-    return mask
-
-
-def jsd(counts: np.ndarray):
-    if len(counts.shape) == 3:
-        counts = np.expand_dims(counts, 0)
-    return _jsd(counts)
-
-
-@numba.jit(nopython=True, cache=True)
-def _jsd(counts: np.ndarray):
-    def entropy(p):
-        return (-p * np.where(p > 0, np.log(p), 0)).sum(axis=-1)
-    r, n, m, _ = counts.shape
-    counts = counts.reshape(r, n, m*m)  # Flatten 2D representation of joint distribution
-    counts_total = counts.sum(axis=-1)
-    h_unmixed = entropy(counts / counts_total.reshape(r, n, 1))
-    counts_mixed = counts.sum(axis=1)
-    h_mixed = entropy(counts_mixed / counts_mixed.sum(axis=-1).reshape(r, 1))
-    return h_mixed - (h_unmixed * counts_total / counts_total.sum(axis=-1).reshape(r, 1)).sum(axis=-1)
-
-
-@numba.jit(nopython=True, cache=True)
-def softmax(x, tau):
-    x = x / tau
-    x = x - x.max()  # For stability
-    return np.exp(x) / np.exp(x).sum()

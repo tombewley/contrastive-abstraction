@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os, psutil
 
-from csta.csta import ContrastiveAbstraction, jsd
+from csta.model import ContrastiveAbstraction, jsd
 
 
 np.set_printoptions(suppress=True, precision=3)

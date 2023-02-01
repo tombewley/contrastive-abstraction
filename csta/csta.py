@@ -48,6 +48,9 @@ class ContrastiveAbstraction:
         _recurse(self.W, self.X, self.X, np.arange(num))
         return mask
 
+    def transition_counts(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray):
+        return self.transition_mask(contexts, states, next_states).sum(axis=3)
+
     def set_1d_context_windows(self, *thresholds):
         self.W.merge()
         window = self.W
@@ -94,7 +97,7 @@ class ContrastiveAbstraction:
                         greedy = np.argmax(context_split_gains[w][-1][1])
                         parent = self.W.leaves[w]
                         parent.split(dim, valid_thresholds[greedy])
-                        match = (self.transition_mask(contexts, states, next_states).sum(axis=3)
+                        match = (self.transition_counts(contexts, states, next_states)
                                  == (counts_exp + delta[greedy])).all()
                         assert match
                         parent.merge()
@@ -154,7 +157,7 @@ class ContrastiveAbstraction:
                         greedy = np.argmax(state_split_gains[x][-1][1])
                         parent = self.X.leaves[x]
                         parent.split(dim, valid_thresholds[greedy])
-                        match = (self.transition_mask(contexts, states, next_states).sum(axis=3)
+                        match = (self.transition_counts(contexts, states, next_states)
                                  == (counts_exp + delta[greedy])).all()
                         assert match
                         parent.merge()
@@ -226,7 +229,7 @@ class ContrastiveAbstraction:
             if candidates[chosen][0] == "context split":
                 _, w, dim, threshold = candidates[chosen]
                 self.W.leaves[w].split(dim, threshold)
-                print(f"(n={self.n}, m={self.m}) Split window {w} at dim {dim} = {threshold}")
+                print(f"(n={self.n}, m={self.m}) Split window {w} at {self.W.dims[dim]} = {threshold}")
             elif candidates[chosen][0] == "context merge":
                 _, parent, ws = candidates[chosen]
                 parent.merge()
@@ -234,7 +237,7 @@ class ContrastiveAbstraction:
             elif candidates[chosen][0] == "state split":
                 _, x, dim, threshold = candidates[chosen]
                 self.X.leaves[x].split(dim, threshold)
-                print(f"(n={self.n}, m={self.m}) Split abstract state {x} at dim {dim} = {threshold}")
+                print(f"(n={self.n}, m={self.m}) Split abstract state {x} at {self.X.dims[dim]} = {threshold}")
             elif candidates[chosen][0] == "state merge":
                 _, parent, xs = candidates[chosen]
                 parent.merge()

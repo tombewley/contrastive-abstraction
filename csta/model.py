@@ -180,15 +180,17 @@ class ContrastiveAbstraction:
         return context_split_gains, context_merge_gains, state_split_gains, state_merge_gains
 
     def make_greedy_change(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
+                           context_split: bool = False, context_merge: bool = False,
+                           state_split: bool = False, state_merge: bool = False,
                            alpha: float = 0., beta: float = 0., power: float = 1., tau: float = 0.):
         n, m = self.n, self.m
         context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = self.eval_changes(
             contexts, states, next_states,
-            context_split=(m > 1), state_split=(n > 1),
-            context_merge=(m > 1 and n > 1), state_merge=(m > 1 and n > 1),
+            context_split=context_split and m > 1, state_split=state_split and n > 1,
+            context_merge=context_merge and m > 1 and n > 1, state_merge=state_merge and m > 1 and n > 1,
         )
         candidates, quals = [], []
-        if m > 1:
+        if context_split and m > 1:
             for w in range(self.n):
                 for dim in range(self.d_c):
                     g = context_split_gains[w][dim]
@@ -198,7 +200,7 @@ class ContrastiveAbstraction:
                         if qual > 0:
                             candidates.append(("context split", w, dim, g[0][greedy]))
                             quals.append(qual)
-        if n > 1:
+        if state_split and n > 1:
             for x in range(self.m):
                 for dim in range(self.d_s):
                     g = state_split_gains[x][dim]
@@ -208,12 +210,13 @@ class ContrastiveAbstraction:
                         if qual > 0:
                             candidates.append(("state split", x, dim, g[0][greedy]))
                             quals.append(qual)
-        if m > 1 and n > 1:
+        if context_merge and m > 1 and n > 1:
             for parent, ws, gain in context_merge_gains:
                 qual = gain - beta * ((n + 1 - len(ws))**power - n**power)
                 if qual > 0:
                     candidates.append(("context merge", parent, ws))
                     quals.append(qual)
+        if state_merge and m > 1 and n > 1:
             for parent, xs, gain in state_merge_gains:
                 qual = gain - alpha * ((m + 1 - len(xs))**power - m**power)
                 if qual > 0:
@@ -229,7 +232,7 @@ class ContrastiveAbstraction:
             if candidates[chosen][0] == "context split":
                 _, w, dim, threshold = candidates[chosen]
                 self.W.leaves[w].split(dim, threshold)
-                print(f"(n={self.n}, m={self.m}) Split window {w} at {self.W.dims[dim]} = {threshold}")
+                print(f"(n={self.n}, m={self.m}) Split window {w} at {self.W.dims[dim]}={threshold}")
             elif candidates[chosen][0] == "context merge":
                 _, parent, ws = candidates[chosen]
                 parent.merge()
@@ -237,12 +240,12 @@ class ContrastiveAbstraction:
             elif candidates[chosen][0] == "state split":
                 _, x, dim, threshold = candidates[chosen]
                 self.X.leaves[x].split(dim, threshold)
-                print(f"(n={self.n}, m={self.m}) Split abstract state {x} at {self.X.dims[dim]} = {threshold}")
+                print(f"(n={self.n}, m={self.m}) Split abstract state {x} at {self.X.dims[dim]}={threshold}")
             elif candidates[chosen][0] == "state merge":
                 _, parent, xs = candidates[chosen]
                 parent.merge()
                 print(f"(n={self.n}, m={self.m}) Merge abstract states {xs}")
-        return candidates
+        return context_split_gains, context_merge_gains, state_split_gains, state_merge_gains, candidates, quals
 
 
 class HRSubset:
@@ -290,7 +293,7 @@ class HRSubset:
     def split(self, dim: int, threshold: float):
         assert self.is_leaf, "Subset has already been split."
         assert 0 <= dim < len(self.dims), f"Split dimension ({dim}) out of range."
-        assert self.bounds[0, dim] <= threshold < self.bounds[1, dim], f"Split (dim {dim} = {threshold}) out of bounds."
+        assert self.bounds[0, dim] <= threshold < self.bounds[1, dim], f"Split (dim {dim}={threshold}) out of bounds."
         self.split_dim = dim
         self.split_threshold = threshold
         bounds_left, bounds_right = self.bounds.copy(), self.bounds.copy()

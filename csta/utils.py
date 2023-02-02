@@ -2,6 +2,7 @@ import numpy as np
 from numba import jit
 from itertools import chain, combinations
 from math import factorial
+from matplotlib.patches import Rectangle
 
 
 def data_bounds(*data):
@@ -35,6 +36,13 @@ def _jsd(counts: np.ndarray):
     counts_mixed = counts.sum(axis=1)
     h_mixed = entropy(counts_mixed / counts_mixed.sum(axis=-1).reshape(r, 1))
     return h_mixed - (h_unmixed * counts_total / counts_total.sum(axis=-1).reshape(r, 1)).sum(axis=-1)
+
+
+def bounds_to_rect(bounds, fill_colour=None, edge_colour="k", alpha=1, lw=0.5, zorder=-1):
+    (xl, yl), (xu, yu) = bounds
+    fill_bool = (fill_colour != None)
+    return Rectangle(xy=[xl,yl], width=xu-xl, height=yu-yl,
+                     fill=fill_bool, facecolor=fill_colour, alpha=alpha, edgecolor=edge_colour, lw=lw, zorder=zorder)
 
 
 @jit(nopython=True, cache=True)

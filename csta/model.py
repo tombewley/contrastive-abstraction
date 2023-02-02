@@ -1,5 +1,5 @@
 import numpy as np
-from .utils import data_bounds, geq_threshold_mask, jsd, softmax
+from .utils import data_bounds, geq_threshold_mask, jsd, softmax, bounds_to_rect
 
 
 class ContrastiveAbstraction:
@@ -300,3 +300,15 @@ class HRSubset:
         bounds_left[1, dim] = bounds_right[0, dim] = threshold
         self.left = HRSubset(self.dims, bounds_left)
         self.right = HRSubset(self.dims, bounds_right)
+
+    def show(self, ax, dims, bounds, nums=False, lw=0.5, alpha=1, zorder=-1):
+        for i, leaf in enumerate(self.leaves):
+            leaf_bounds = leaf.bounds[:, dims]
+            leaf_bounds[0] = np.maximum(leaf_bounds[0], bounds[0])
+            leaf_bounds[1] = np.minimum(leaf_bounds[1], bounds[1])
+            ax.add_patch(bounds_to_rect(leaf_bounds, fill_colour=None, lw=lw, alpha=alpha, zorder=zorder))
+            if nums:
+                x, y = (leaf_bounds[0] + leaf_bounds[1]) / 2
+                ax.text(x, y, i, horizontalalignment="center", verticalalignment="center")
+        ax.autoscale_view()
+        return ax

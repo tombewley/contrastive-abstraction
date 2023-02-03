@@ -1,5 +1,5 @@
 import numpy as np
-from .utils import data_bounds, geq_threshold_mask, jsd, softmax, bounds_to_rect
+from .utils import *
 
 
 class ContrastiveAbstraction:
@@ -24,32 +24,36 @@ class ContrastiveAbstraction:
     @property
     def d_s(self): return len(self.X.dims)
 
-    def transition_mask(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray):
+    def abstract_mapping(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray):
         num = contexts.shape[0]
         assert states.shape[0] == next_states.shape[0] == num, "Arrays must have common length."
-        l_W, l_X = self.W.leaves, self.X.leaves
-        mask = np.zeros((len(l_W), len(l_X), len(l_X), num), dtype=np.bool_)
+        l_W_index = {w: i for i, w in enumerate(self.W.leaves)}
+        l_X_index = {x: i for i, x in enumerate(self.X.leaves)}
+        mapping = np.zeros((num, 3), dtype=np.int_)
         def _recurse(w, x, xx, indices):
+            if len(indices) == 0: return
             w_l = w_r = w; x_l = x_r = x; xx_l = xx_r = xx
-            if not w.is_leaf:
+            try:
                 right = w.sort(contexts[indices])
                 w_l, w_r = w.left, w.right
-            elif not x.is_leaf:
-                right = x.sort(states[indices])
-                x_l, x_r = x.left, x.right
-            elif not xx.is_leaf:
-                right = xx.sort(next_states[indices])
-                xx_l, xx_r = xx.left, xx.right
-            else:
-                mask[l_W.index(w), l_X.index(x), l_X.index(xx), indices] = True
-                return
+            except AssertionError:
+                try:
+                    right = x.sort(states[indices])
+                    x_l, x_r = x.left, x.right
+                except AssertionError:
+                    try:
+                        right = xx.sort(next_states[indices])
+                        xx_l, xx_r = xx.left, xx.right
+                    except AssertionError:
+                        mapping[indices] = [l_W_index[w], l_X_index[x], l_X_index[xx]]
+                        return
             _recurse(w_l, x_l, xx_l, indices[~right])
             _recurse(w_r, x_r, xx_r, indices[ right])
         _recurse(self.W, self.X, self.X, np.arange(num))
-        return mask
+        return mapping
 
     def transition_counts(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray):
-        return self.transition_mask(contexts, states, next_states).sum(axis=3)
+        return mapping_to_counts(self.abstract_mapping(contexts, states, next_states), n=self.n, m=self.m)
 
     def set_1d_context_windows(self, *thresholds):
         self.W.merge()
@@ -61,40 +65,40 @@ class ContrastiveAbstraction:
     def eval_changes(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
                      context_split: bool = False, context_merge: bool = False,
                      state_split: bool = False, state_merge: bool = False,
-                     debug: bool = False):
+                     exhaustive: bool = True, debug: bool = False):
         n, m = self.n, self.m
         context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = None, None, None, None
-        # Propagate the dataset through the extant abstractions and compute JSD as a baseline
-        mask_current = self.transition_mask(contexts, states, next_states)
-        counts_current = mask_current.sum(axis=3)
+        # Map the dataset through the extant abstractions and compute JSD as a baseline
+        mapping_current = self.abstract_mapping(contexts, states, next_states)
+        counts_current = mapping_to_counts(mapping_current, n=n, m=m)
         jsd_current = jsd(counts_current)[0]
         if context_split:
             assert m > 1, "Context splitting requires at least two abstract states."
-            w_mask_current = mask_current.sum(axis=(1, 2)).astype(bool)
-            context_split_gains = [[] for _ in range(n)]
-            for w in range(n):
-                bounds = data_bounds(contexts[w_mask_current[w]])
-                # Define expanded mask and counts arrays
-                mask_exp = np.insert(mask_current, w + 1, 0, axis=0)
+            # Either exhaustively try all windows, or just the one with largest population
+            windows_to_split = range(n) if exhaustive else [counts_current.sum(axis=(1, 2)).argmax()]
+            context_split_gains = {w: {} for w in windows_to_split}
+            for w in windows_to_split:
+                w_here_mask = mapping_current[:, 0] == w
+                bounds = data_bounds(contexts[w_here_mask])
+                # Add to window indices and expand counts arrays
+                mapping_exp = mapping_current.copy()
+                mapping_exp[mapping_exp[:, 0] > w, 0] += 1
                 counts_exp = np.insert(counts_current, w + 1, 0, axis=0)
                 for dim in range(self.d_c):
                     # Valid thresholds are those that lie within the bounds of the observations in this window
                     th = self.context_split_thresholds[dim]
                     valid_thresholds = th[np.logical_and(bounds[0, dim] < th, th < bounds[1, dim])]
                     # Compare all context values to all valid thresholds in parallel
-                    move = geq_threshold_mask(contexts, w_mask_current[w], dim, valid_thresholds)
-                    delta = np.zeros((len(valid_thresholds), n + 1, m, m), dtype=np.int_)
-                    for c in range(len(valid_thresholds)):
-                        # Handle transitions where the context is in the right child
-                        delta_w = mask_exp[w, :, :, move[c]].sum(axis=0)
-                        delta[c, w] -= delta_w
-                        delta[c, w + 1] += delta_w
-                        assert (delta[c].sum(axis=0) == 0).all()
+                    move = geq_threshold_mask(contexts, w_here_mask, dim, valid_thresholds)
+                    move_any = move.any(axis=1)
+                    # Build delta array
+                    delta = build_delta_array_w(move[move_any], mapping_exp[move_any], w, n, m)
+                    assert (delta.sum(axis=1) == 0).all()
                     # Record Jensen-Shannon divergence for each valid threshold
-                    context_split_gains[w].append((valid_thresholds, jsd(counts_exp + delta) - jsd_current))
+                    context_split_gains[w][dim] = (valid_thresholds, jsd(counts_exp + delta) - jsd_current)
                     # Check that computed counts match that after split is made
                     if debug and len(valid_thresholds) > 0:
-                        greedy = np.argmax(context_split_gains[w][-1][1])
+                        greedy = np.argmax(context_split_gains[w][dim][1])
                         parent = self.W.leaves[w]
                         parent.split(dim, valid_thresholds[greedy])
                         match = (self.transition_counts(contexts, states, next_states)
@@ -115,14 +119,17 @@ class ContrastiveAbstraction:
                 context_merge_gains.append((parent, ws, jsd(counts_merged)[0] - jsd_current))
         if state_split:
             assert n > 1, "State splitting requires at least two context windows."
-            x_mask_current = mask_current.sum(axis=(0, 2)).astype(bool)
-            xx_mask_current = mask_current.sum(axis=(0, 1)).astype(bool)
-            state_split_gains = [[] for _ in range(m)]
-            for x in range(m):
-                bounds = data_bounds(states[x_mask_current[x]], next_states[xx_mask_current[x]])
-                # Define expanded mask and counts arrays
-                mask_exp = np.insert(mask_current, x + 1, 0, axis=1)
-                mask_exp = np.insert(mask_exp, x + 1, 0, axis=2)
+            # Either exhaustively try all states, or just the one with largest population (first states)
+            states_to_split = range(m) if exhaustive else [counts_current.sum(axis=(0, 2)).argmax()]
+            state_split_gains = {x: {} for x in states_to_split}
+            for x in states_to_split:
+                x_here_mask = mapping_current[:, 1] == x
+                xx_here_mask = mapping_current[:, 2] == x
+                bounds = data_bounds(states[x_here_mask], next_states[xx_here_mask])
+                # Add to state indices and expand counts arrays
+                mapping_exp = mapping_current.copy()
+                mapping_exp[mapping_exp[:, 1] > x, 1] += 1
+                mapping_exp[mapping_exp[:, 2] > x, 2] += 1
                 counts_exp = np.insert(counts_current, x + 1, 0, axis=1)
                 counts_exp = np.insert(counts_exp, x + 1, 0, axis=2)
                 for dim in range(self.d_s):
@@ -130,31 +137,17 @@ class ContrastiveAbstraction:
                     th = self.state_split_thresholds[dim]
                     valid_thresholds = th[np.logical_and(bounds[0, dim] < th, th < bounds[1, dim])]
                     # Compare all state values to all valid thresholds in parallel
-                    move_x = geq_threshold_mask(states, x_mask_current[x], dim, valid_thresholds)
-                    move_xx = geq_threshold_mask(next_states, xx_mask_current[x], dim, valid_thresholds)
-                    move_both = np.logical_and(move_x, move_xx)
-                    move_x_only = np.logical_and(move_x, ~move_xx)
-                    move_xx_only = np.logical_and(~move_x, move_xx)
-                    delta = np.zeros((len(valid_thresholds), n, m + 1, m + 1), dtype=np.int_)
-                    for c in range(len(valid_thresholds)):
-                        # Handle transitions where the first state is in the right child
-                        delta_x_only = mask_exp[:, x, :, move_x_only[c]].sum(axis=0)
-                        delta[c, :, x, :] -= delta_x_only
-                        delta[c, :, x + 1, :] += delta_x_only
-                        # Handle transitions where the second state is in the right child
-                        delta_xx_only = mask_exp[:, :, x, move_xx_only[c]].sum(axis=2)
-                        delta[c, :, :, x] -= delta_xx_only
-                        delta[c, :, :, x + 1] += delta_xx_only
-                        # Handle transitions where both states are in the right child
-                        delta_both = mask_exp[:, x, x, move_both[c]].sum(axis=1)
-                        delta[c, :, x, x] -= delta_both
-                        delta[c, :, x + 1, x + 1] += delta_both
-                        assert (delta[c].sum(axis=(1, 2)) == 0).all()
+                    move_x = geq_threshold_mask(states, x_here_mask, dim, valid_thresholds)
+                    move_xx = geq_threshold_mask(next_states, xx_here_mask, dim, valid_thresholds)
+                    move_any = np.logical_or(move_x, move_xx).any(axis=1)
+                    # Build delta array
+                    delta = build_delta_array_x(move_x[move_any], move_xx[move_any], mapping_exp[move_any], x, n, m)
+                    assert (delta.sum(axis=(2, 3)) == 0).all()
                     # Record Jensen-Shannon divergence for each valid threshold
-                    state_split_gains[x].append((valid_thresholds, jsd(counts_exp + delta) - jsd_current))
+                    state_split_gains[x][dim] = (valid_thresholds, jsd(counts_exp + delta) - jsd_current)
                     # Check that computed counts match that after split is made
                     if debug and len(valid_thresholds) > 0:
-                        greedy = np.argmax(state_split_gains[x][-1][1])
+                        greedy = np.argmax(state_split_gains[x][dim][1])
                         parent = self.X.leaves[x]
                         parent.split(dim, valid_thresholds[greedy])
                         match = (self.transition_counts(contexts, states, next_states)
@@ -181,17 +174,17 @@ class ContrastiveAbstraction:
 
     def make_greedy_change(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
                            context_split: bool = False, context_merge: bool = False,
-                           state_split: bool = False, state_merge: bool = False,
+                           state_split: bool = False, state_merge: bool = False, exhaustive: bool = True,
                            alpha: float = 0., beta: float = 0., power: float = 1., tau: float = 0.):
         n, m = self.n, self.m
         context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = self.eval_changes(
             contexts, states, next_states,
             context_split=context_split and m > 1, state_split=state_split and n > 1,
             context_merge=context_merge and m > 1 and n > 1, state_merge=state_merge and m > 1 and n > 1,
-        )
+            exhaustive=exhaustive)
         candidates, quals = [], []
         if context_split and m > 1:
-            for w in range(self.n):
+            for w in context_split_gains:
                 for dim in range(self.d_c):
                     g = context_split_gains[w][dim]
                     if len(g[1]) > 0:
@@ -201,7 +194,7 @@ class ContrastiveAbstraction:
                             candidates.append(("context split", w, dim, g[0][greedy]))
                             quals.append(qual)
         if state_split and n > 1:
-            for x in range(self.m):
+            for x in state_split_gains:
                 for dim in range(self.d_s):
                     g = state_split_gains[x][dim]
                     if len(g[1]) > 0:

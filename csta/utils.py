@@ -5,6 +5,12 @@ from math import factorial
 from matplotlib.patches import Rectangle
 
 
+def quantile_thresholds(data, q=1, method="midpoint"):
+    # Double use of unique() function and midpoint interpolation handles categoricals
+    return [np.unique(np.percentile(np.unique(data[:, d]), q=np.arange(q, 100, q), method=method))
+            for d in range(data.shape[1])]
+
+
 def mapping_to_counts(mapping, n, m):
     counts = np.zeros((n, m, m), dtype=np.int_)
     for (w, x, xx), c in zip(*np.unique(mapping, axis=0, return_counts=True)):

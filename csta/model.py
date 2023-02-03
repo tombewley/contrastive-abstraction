@@ -299,9 +299,10 @@ class HRSubset:
             leaf_bounds = leaf.bounds[:, dims]
             leaf_bounds[0] = np.maximum(leaf_bounds[0], bounds[0])
             leaf_bounds[1] = np.minimum(leaf_bounds[1], bounds[1])
-            ax.add_patch(bounds_to_rect(leaf_bounds, fill_colour=None, lw=lw, alpha=alpha, zorder=zorder))
+            rect = bounds_to_rect(leaf_bounds, fill_colour=None, lw=lw, alpha=alpha, zorder=zorder)
+            ax.add_patch(rect)
             if nums:
-                x, y = (leaf_bounds[0] + leaf_bounds[1]) / 2
+                x, y = rect.get_x() + rect.get_width() / 2, rect.get_y() + rect.get_height() / 2
                 ax.text(x, y, i, horizontalalignment="center", verticalalignment="center")
         ax.autoscale_view()
         return ax

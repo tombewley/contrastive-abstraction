@@ -80,9 +80,10 @@ def _jsd(counts: np.ndarray):
 
 
 def bounds_to_rect(bounds, fill_colour=None, edge_colour="k", alpha=1, lw=0.5, zorder=-1):
-    (xl, yl), (xu, yu) = bounds
+    xl, xu = bounds[:, 0]
+    yl, yu = bounds[:, 1] if bounds.shape[1] == 2 else (0, 1)
     fill_bool = (fill_colour != None)
-    return Rectangle(xy=[xl,yl], width=xu-xl, height=yu-yl,
+    return Rectangle(xy=[xl, yl], width=xu-xl, height=yu-yl,
                      fill=fill_bool, facecolor=fill_colour, alpha=alpha, edgecolor=edge_colour, lw=lw, zorder=zorder)
 
 

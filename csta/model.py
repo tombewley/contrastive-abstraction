@@ -189,7 +189,7 @@ class ContrastiveAbstraction:
                     g = context_split_gains[w][dim]
                     if len(g[1]) > 0:
                         greedy = np.argmax(g[1])
-                        qual = g[1][greedy] - beta * ((n + 1)**power - n**power)
+                        qual = g[1][greedy] - beta * (n**power - (n - 1)**power)
                         if qual > 0:
                             candidates.append(("context split", w, dim, g[0][greedy]))
                             quals.append(qual)
@@ -199,19 +199,19 @@ class ContrastiveAbstraction:
                     g = state_split_gains[x][dim]
                     if len(g[1]) > 0:
                         greedy = np.argmax(g[1])
-                        qual = g[1][greedy] - alpha * ((m + 1)**power - m**power)
+                        qual = g[1][greedy] - alpha * (m**power - (m - 1)**power)
                         if qual > 0:
                             candidates.append(("state split", x, dim, g[0][greedy]))
                             quals.append(qual)
         if context_merge and m > 1 and n > 1:
             for parent, ws, gain in context_merge_gains:
-                qual = gain - beta * ((n + 1 - len(ws))**power - n**power)
+                qual = gain - beta * ((n - len(ws))**power - (n - 1)**power)
                 if qual > 0:
                     candidates.append(("context merge", parent, ws))
                     quals.append(qual)
         if state_merge and m > 1 and n > 1:
             for parent, xs, gain in state_merge_gains:
-                qual = gain - alpha * ((m + 1 - len(xs))**power - m**power)
+                qual = gain - alpha * ((m - len(xs))**power - (m - 1)**power)
                 if qual > 0:
                     candidates.append(("state merge", parent, xs))
                     quals.append(qual)

@@ -65,7 +65,7 @@ class ContrastiveAbstraction:
     def eval_changes(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
                      context_split: bool = False, context_merge: bool = False,
                      state_split: bool = False, state_merge: bool = False,
-                     exhaustive: bool = True, debug: bool = False):
+                     exhaustive: bool = True, merge_pairs_only: bool = True, debug: bool = False):
         n, m = self.n, self.m
         context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = None, None, None, None
         # Map the dataset through the extant abstractions and compute JSD as a baseline
@@ -109,7 +109,7 @@ class ContrastiveAbstraction:
             assert n > 1, "Context merging requires at least two windows."
             context_merge_gains = []
             transition_sums = counts_current.sum(axis=0)
-            for parent, ws in self.W.merge_sets:
+            for parent, ws in self.W.merge_sets(pairs_only=merge_pairs_only):
                 # Merge counts along window axis
                 counts_merged = np.concatenate([counts_current[:ws[0]],
                                                 counts_current[ws].sum(axis=0, keepdims=True),
@@ -158,7 +158,7 @@ class ContrastiveAbstraction:
             assert m > 1, "State merging requires at least two abstract states."
             state_merge_gains = []
             window_sums = counts_current.sum(axis=(1, 2))
-            for parent, xs in self.X.merge_sets:
+            for parent, xs in self.X.merge_sets(pairs_only=merge_pairs_only):
                 # Merge counts along first state axis
                 counts_merged = np.concatenate([counts_current[:, :xs[0]],
                                                 counts_current[:, xs].sum(axis=1, keepdims=True),
@@ -173,15 +173,15 @@ class ContrastiveAbstraction:
         return context_split_gains, context_merge_gains, state_split_gains, state_merge_gains
 
     def make_greedy_change(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
-                           context_split: bool = False, context_merge: bool = False,
-                           state_split: bool = False, state_merge: bool = False, exhaustive: bool = True,
+                           context_split: bool = False, context_merge: bool = False, state_split: bool = False,
+                           state_merge: bool = False, exhaustive: bool = True, merge_pairs_only: bool = False,
                            alpha: float = 0., beta: float = 0., power: float = 1., tau: float = 0.):
         n, m = self.n, self.m
         context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = self.eval_changes(
             contexts, states, next_states,
             context_split=context_split and m > 1, state_split=state_split and n > 1,
             context_merge=context_merge and m > 1 and n > 1, state_merge=state_merge and m > 1 and n > 1,
-            exhaustive=exhaustive)
+            exhaustive=exhaustive, merge_pairs_only=merge_pairs_only)
         candidates, quals = [], []
         if context_split and m > 1:
             for w in context_split_gains:
@@ -265,13 +265,13 @@ class HRSubset:
             return [self]
         return self.left.leaves + self.right.leaves
 
-    @property
-    def merge_sets(self):
+    def merge_sets(self, pairs_only: bool = False):
         leaves = self.leaves
         merge_sets_ = []
         def _recurse(subset):
             if subset.is_leaf: return
-            merge_sets_.append((subset, np.array([leaves.index(l) for l in subset.leaves])))
+            if not(pairs_only) or (subset.left.is_leaf and subset.right.is_leaf):
+                merge_sets_.append((subset, np.array([leaves.index(l) for l in subset.leaves])))
             _recurse(subset.left); _recurse(subset.right)
         _recurse(self)
         return merge_sets_

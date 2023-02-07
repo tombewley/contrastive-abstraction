@@ -5,8 +5,9 @@ from math import factorial
 from matplotlib.patches import Rectangle
 
 
-def quantile_thresholds(data, q=1, method="midpoint"):
-    # Double use of unique() function and midpoint interpolation handles categoricals
+def quantile_thresholds(data, q=1, method="higher"):
+    # Double use of unique() function and higher interpolation handles categoricals
+    # NOTE: using method="midpoint" seems to create precision issues during splitting process
     return [np.unique(np.percentile(np.unique(data[:, d]), q=np.arange(q, 100, q), method=method))
             for d in range(data.shape[1])]
 

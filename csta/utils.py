@@ -95,6 +95,20 @@ def softmax(x, tau):
     return np.exp(x) / np.exp(x).sum()
 
 
+def print_matrix(model, matrix):
+    float_prec = np.get_printoptions()["precision"]
+    def float_formatter(f):
+        s = f"{{:.{float_prec}f}}".format(f)
+        z = len(s) - len(s.rstrip("0"))
+        return s.rstrip("0") + " " * z
+    with np.printoptions(formatter={"int": f"{{:>{len(str(int(np.nanmax(matrix))))}d}}".format,
+                                    "float": float_formatter}):
+        for w, mat_w in zip(model.W.leaves, matrix.copy()):
+            print(w)
+            for x, mat_w_x in zip(model.X.leaves, mat_w):
+                print("    ", mat_w_x, x)
+
+
 def powerset(iterable):
     s = list(iterable)
     return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))

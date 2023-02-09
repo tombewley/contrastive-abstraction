@@ -66,7 +66,7 @@ class ContrastiveAbstraction:
     def eval_changes(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
                      context_split: bool = False, context_merge: bool = False,
                      state_split: bool = False, state_merge: bool = False,
-                     exhaustive: bool = True, merge_pairs_only: bool = True, debug: bool = False):
+                     exhaustive: bool = True, merge_pairs_only: bool = True, eps: float = 0., debug: bool = False):
         n, m = self.n, self.m
         context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = None, None, None, None
         # Map the dataset through the extant abstractions and compute JSD as a baseline
@@ -79,6 +79,7 @@ class ContrastiveAbstraction:
             windows_to_split = range(n) if exhaustive else [counts_current.sum(axis=(1, 2)).argmax()]
             context_split_gains = {w: {} for w in windows_to_split}
             for w in windows_to_split:
+                parent = self.W.leaves[w]
                 w_here_mask = mapping_current[:, 0] == w
                 bounds = data_bounds(contexts[w_here_mask])
                 # Add to window indices and expand counts arrays
@@ -86,9 +87,11 @@ class ContrastiveAbstraction:
                 mapping_exp[mapping_exp[:, 0] > w, 0] += 1
                 counts_exp = np.insert(counts_current, w + 1, 0, axis=0)
                 for dim in range(self.d_c):
-                    # Valid thresholds are those that lie within the bounds of the observations in this window
+                    # Valid thresholds are within the bounds of the observations in this window + don't violate epsilon
                     th = self.context_split_thresholds[dim]
-                    valid_thresholds = th[np.logical_and(bounds[0, dim] < th, th < bounds[1, dim])]
+                    valid_thresholds = th[np.logical_and(
+                        np.logical_and(bounds[0, dim] < th, parent.bounds[0, dim] + eps <= th),
+                        np.logical_and(th < bounds[1, dim], parent.bounds[1, dim] - eps >= th))]
                     # Compare all context values to all valid thresholds in parallel
                     move = geq_threshold_mask(contexts, w_here_mask, dim, valid_thresholds)
                     move_any = move.any(axis=1)
@@ -100,7 +103,6 @@ class ContrastiveAbstraction:
                     # Check that computed counts match that after split is made
                     if debug and len(valid_thresholds) > 0:
                         greedy = np.argmax(context_split_gains[w][dim][1])
-                        parent = self.W.leaves[w]
                         parent.split(dim, valid_thresholds[greedy])
                         match = (self.transition_counts(contexts, states, next_states)
                                  == (counts_exp + delta[greedy])).all()
@@ -134,7 +136,7 @@ class ContrastiveAbstraction:
                 counts_exp = np.insert(counts_current, x + 1, 0, axis=1)
                 counts_exp = np.insert(counts_exp, x + 1, 0, axis=2)
                 for dim in range(self.d_s):
-                    # Valid thresholds are those that lie within the bounds of the observations in this abstract state
+                    # Valid thresholds are within the bounds of the observations in this abstract state
                     th = self.state_split_thresholds[dim]
                     valid_thresholds = th[np.logical_and(bounds[0, dim] < th, th < bounds[1, dim])]
                     # Compare all state values to all valid thresholds in parallel
@@ -176,13 +178,13 @@ class ContrastiveAbstraction:
     def make_greedy_change(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
                            context_split: bool = False, context_merge: bool = False, state_split: bool = False,
                            state_merge: bool = False, exhaustive: bool = True, merge_pairs_only: bool = False,
-                           alpha: float = 0., beta: float = 0., power: float = 1., tau: float = 0.):
+                           alpha: float = 0., beta: float = 0., power: float = 1., eps: float = 0., tau: float = 0.):
         n, m = self.n, self.m
         context_split_gains, context_merge_gains, state_split_gains, state_merge_gains = self.eval_changes(
             contexts, states, next_states,
             context_split=context_split and m > 1, state_split=state_split and n > 1,
             context_merge=context_merge and m > 1 and n > 1, state_merge=state_merge and m > 1 and n > 1,
-            exhaustive=exhaustive, merge_pairs_only=merge_pairs_only)
+            exhaustive=exhaustive, merge_pairs_only=merge_pairs_only, eps=eps)
         candidates, quals = [], []
         if context_split and m > 1:
             for w in context_split_gains:

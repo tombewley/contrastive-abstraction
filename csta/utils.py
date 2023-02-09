@@ -114,7 +114,7 @@ def powerset(iterable):
     return chain.from_iterable(combinations(s, r) for r in range(len(s) + 1))
 
 
-def shapley(v: dict):
+def shapley(v: dict, normalise: bool = False):
     contrib = {}
     for xs in v:
         for i, x in enumerate(xs):
@@ -122,9 +122,11 @@ def shapley(v: dict):
             if x not in contrib:
                 contrib[x] = dict()
             contrib[x][other_xs] = v[xs] - v[other_xs]
+    v_diff_max = v[frozenset(contrib.keys())] - v[frozenset()]
     n = len(contrib)
     n_fact = factorial(n)
     w = [factorial(i) * factorial(n - i - 1) / n_fact for i in range(0, n)]
-    return {x: sum(w[len(other_xs)] * con              # weighted sum of contributions...
+    return {x: sum(w[len(other_xs)] * con /            # weighted sum of contributions...
+                   (v_diff_max if normalise else 1.)   # possibly normalised by v_diff_max...
                    for other_xs, con in cont.items())  # starting from each coalition of other features...
             for x, cont in contrib.items()}            # for each feature

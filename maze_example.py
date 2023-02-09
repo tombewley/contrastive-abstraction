@@ -14,7 +14,7 @@ from csta.utils import jsd
 
 # Parse optional arguments
 parser = ArgumentParser()
-parser.add_argument("-a", "--alpha", type=float, default=0.05)  # Regularisation on umber of abstract states (m)
+parser.add_argument("-a", "--alpha", type=float, default=0.05)  # Regularisation on number of abstract states (m)
 parser.add_argument("-b", "--beta", type=float, default=0.01)  # Regularisation on number of time windows (n)
 parser.add_argument("-e", "--epsilon", type=float, default=25)  # Minimum time window width
 parser.add_argument("-ph", "--plot_history", type=int, default=0)

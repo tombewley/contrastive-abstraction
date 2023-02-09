@@ -46,7 +46,7 @@ model = ContrastiveAbstraction(context_dims=["ep"],
                                )
 
 # Prior to state abstraction stage, initialise with 'maximal' temporal abstraction using all split points
-model.set_1d_context_windows(*episode_split_thresholds)
+model.W.multisplit(dim=0, thresholds=episode_split_thresholds)
 
 # Start by considering state splits only
 do_state_splits, do_episode_splits = True, False

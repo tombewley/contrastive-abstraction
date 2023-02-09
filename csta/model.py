@@ -56,13 +56,6 @@ class ContrastiveAbstraction:
     def transition_counts(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray):
         return mapping_to_counts(self.abstract_mapping(contexts, states, next_states), n=self.n, m=self.m)
 
-    def set_1d_context_windows(self, *thresholds):
-        self.W.merge()
-        window = self.W
-        for threshold in sorted(thresholds):
-            window.split(0, threshold)
-            window = window.right
-
     def eval_changes(self, contexts: np.ndarray, states: np.ndarray, next_states: np.ndarray,
                      context_split: bool = False, context_merge: bool = False,
                      state_split: bool = False, state_merge: bool = False,
@@ -296,6 +289,11 @@ class HRSubset:
         bounds_left[1, dim] = bounds_right[0, dim] = threshold
         self.left = HRSubset(self.dims, bounds_left)
         self.right = HRSubset(self.dims, bounds_right)
+
+    def multisplit(self, dim: int, thresholds):
+        self.split(dim, thresholds[0])
+        if len(thresholds) > 1:
+            self.right.multisplit(dim, thresholds[1:])
 
     def show(self, ax, dims, bounds, nums=False, lw=0.5, alpha=1, zorder=-1):
         for i, leaf in enumerate(self.leaves):

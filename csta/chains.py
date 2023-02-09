@@ -35,6 +35,20 @@ class MarkovChains:
         evec1 = np.swapaxes(evecs, 1, 2)[np.isclose(evals, 1)]
         return (evec1 / evec1.sum(axis=1, keepdims=True)).real
 
+    @property
+    def fundamental(self):
+        N_and_B = np.full_like(self.conditional, np.nan)
+        for i, P in enumerate(self.conditional):
+            transient = ~np.isnan(P).any(axis=1)
+            transient_idx = np.argwhere(transient).flatten()
+            n_tr = transient.sum()
+            N = np.linalg.inv(np.identity(n_tr) - P[transient][:, transient])  # Visits before absorption
+            B = np.matmul(N, P[transient][:, ~transient])  # Absorption probabilities
+            for x, N_row, B_row in zip(transient_idx, N, B):
+                N_and_B[i, x, transient] = N_row
+                N_and_B[i, x, ~transient] = B_row
+        return N_and_B
+
     def perturb(self, source: list[tuple], dest: list[tuple]):
         perturbed_conditional = self.conditional.copy()
         for s, d in zip(source, dest):

@@ -1,5 +1,5 @@
 """
-(Approximately) replicates the abstraction in Figure 1 of
+Replicates the abstraction in Figure 1 of
 "Summarising and Comparing Agent Dynamics with Contrastive Spatiotemporal Abstraction".
 NOTE: The final state split differs slightly due to small mathematical changes inside the model.
 """

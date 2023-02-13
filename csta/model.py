@@ -12,9 +12,9 @@ class ContrastiveAbstraction:
         assert len(context_split_thresholds) == len(context_dims), "Must specify split thresholds for every dim."
         assert len(state_split_thresholds) == len(state_dims), "Must specify split thresholds for every dim."
         self.W = HRSubset(dims=context_dims)
-        self.context_split_thresholds = context_split_thresholds
+        self.context_split_thresholds = [np.sort(th) for th in context_split_thresholds]
         self.X = HRSubset(dims=state_dims)
-        self.state_split_thresholds = state_split_thresholds
+        self.state_split_thresholds = [np.sort(th) for th in state_split_thresholds]
 
     @property
     def n(self): return len(self.W.leaves)
@@ -85,11 +85,8 @@ class ContrastiveAbstraction:
                     valid_thresholds = th[np.logical_and(
                         np.logical_and(bounds[0, dim] < th, parent.bounds[0, dim] + eps <= th),
                         np.logical_and(th < bounds[1, dim], parent.bounds[1, dim] - eps >= th))]
-                    # Compare all context values to all valid thresholds in parallel
-                    move = geq_threshold_mask(contexts, w_here_mask, dim, valid_thresholds)
-                    move_any = move.any(axis=1)
-                    # Build delta array
-                    delta = build_delta_array_w(move[move_any], mapping_exp[move_any], w, n, m)
+                    # Build delta array and compute Jensen-Shannon divergence for each valid threshold
+                    delta = build_delta_array_w(contexts, w_here_mask, mapping_exp, dim, valid_thresholds, w, n, m)
                     assert (delta.sum(axis=1) == 0).all()
                     # Record Jensen-Shannon divergence for each valid threshold
                     context_split_gains[w][dim] = (valid_thresholds, jsd(counts_exp + delta) - jsd_current)
@@ -132,14 +129,10 @@ class ContrastiveAbstraction:
                     # Valid thresholds are within the bounds of the observations in this abstract state
                     th = self.state_split_thresholds[dim]
                     valid_thresholds = th[np.logical_and(bounds[0, dim] < th, th < bounds[1, dim])]
-                    # Compare all state values to all valid thresholds in parallel
-                    move_x = geq_threshold_mask(states, x_here_mask, dim, valid_thresholds)
-                    move_xx = geq_threshold_mask(next_states, xx_here_mask, dim, valid_thresholds)
-                    move_any = np.logical_or(move_x, move_xx).any(axis=1)
-                    # Build delta array
-                    delta = build_delta_array_x(move_x[move_any], move_xx[move_any], mapping_exp[move_any], x, n, m)
+                    # Build delta array and compute Jensen-Shannon divergence for each valid threshold
+                    delta = build_delta_array_x(states, next_states, x_here_mask, xx_here_mask, mapping_exp,
+                                                dim, valid_thresholds, x, n, m)
                     assert (delta.sum(axis=(2, 3)) == 0).all()
-                    # Record Jensen-Shannon divergence for each valid threshold
                     state_split_gains[x][dim] = (valid_thresholds, jsd(counts_exp + delta) - jsd_current)
                     # Check that computed counts match that after split is made
                     if debug and len(valid_thresholds) > 0:

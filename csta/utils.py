@@ -26,38 +26,43 @@ def data_bounds(*data):
     return np.array([data.min(axis=0), data.max(axis=0)])
 
 
-@jit(nopython=True, cache=True, parallel=True)
-def geq_threshold_mask(data: np.ndarray, init_mask: np.ndarray, dim: int, thresholds: np.ndarray):
-    mask = np.zeros((data.shape[0], thresholds.shape[0]), dtype=np.bool_)
-    mask[init_mask] = data[init_mask, dim].copy().reshape(-1, 1) >= thresholds.reshape(1, -1)
-    return mask
-
-
 @jit(nopython=True, cache=True)
-def build_delta_array_w(move, mapping_exp, w, n, m):
-    delta = np.zeros((move.shape[1], n + 1, m, m), dtype=np.int_)
-    for m, (w, xi, xxi) in zip(move, mapping_exp):
-        delta[m, w, xi, xxi] -= 1
-        delta[m, w + 1, xi, xxi] += 1
+def build_delta_array_w(contexts, w_here_mask, mapping_exp, dim, thresholds, w, n, m):
+    # Get index of first threshold strictly > each context along the specified dimension
+    first_threshold = np.zeros(len(contexts), dtype=np.int_)
+    first_threshold[w_here_mask] = np.searchsorted(thresholds, contexts[w_here_mask, dim], side="right")
+    # Iterate through data to update delta
+    delta = np.zeros((len(thresholds), n + 1, m, m), dtype=np.int_)
+    for ft, (w, xi, xxi) in zip(first_threshold, mapping_exp):
+        if ft == 0: continue
+        delta[:ft, w, xi, xxi] -= 1
+        delta[:ft, w + 1, xi, xxi] += 1
     return delta
 
 
 @jit(nopython=True, cache=True)
-def build_delta_array_x(move_x, move_xx, mapping_exp, x, n, m):
-    move_both = np.logical_and(move_x, move_xx)
-    move_x_only = np.logical_and(move_x, ~move_xx)
-    move_xx_only = np.logical_and(~move_x, move_xx)
-    delta = np.zeros((move_x.shape[1], n, m + 1, m + 1), dtype=np.int_)
-    for m_x, m_xx, m_b, (w, xi, xxi) in zip(move_x_only, move_xx_only, move_both, mapping_exp):
-        # Handle transitions where the first state is in the right child
-        delta[m_x, w, x, xxi] -= 1
-        delta[m_x, w, x + 1, xxi] += 1
+def build_delta_array_x(states, next_states, x_here_mask, xx_here_mask, mapping_exp, dim, thresholds, x, n, m):
+    # Get index of first threshold strictly > each state and next state along the specified dimension
+    first_threshold = np.zeros((len(states), 2), dtype=np.int_)
+    first_threshold[x_here_mask, 0] = np.searchsorted(thresholds, states[x_here_mask, dim], side="right")
+    first_threshold[xx_here_mask, 1] = np.searchsorted(thresholds, next_states[xx_here_mask, dim], side="right")
+    # Iterate through data to update delta
+    delta = np.zeros((len(thresholds), n, m + 1, m + 1), dtype=np.int_)
+    for ft, mn_i, (w, xi, xxi) in zip(first_threshold, np.argmin(first_threshold, axis=1), mapping_exp):
+        mn_v, mx_v = ft[mn_i], ft[1 - mn_i]
+        if mx_v == 0: continue
+        if mn_i == 1:
+            # Handle transitions where the first state is in the right child
+            delta[mn_v:mx_v, w, x, xxi] -= 1
+            delta[mn_v:mx_v, w, x + 1, xxi] += 1
         # Handle transitions where the second state is in the right child
-        delta[m_xx, w, xi, x] -= 1
-        delta[m_xx, w, xi, x + 1] += 1
+        else:
+            delta[mn_v:mx_v, w, xi, x] -= 1
+            delta[mn_v:mx_v, w, xi, x + 1] += 1
+        if mn_v == 0: continue
         # Handle transitions where both states are in the right child
-        delta[m_b, w, x, x] -= 1
-        delta[m_b, w, x + 1, x + 1] += 1
+        delta[:mn_v, w, x, x] -= 1
+        delta[:mn_v, w, x + 1, x + 1] += 1
     return delta
 
 

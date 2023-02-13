@@ -126,14 +126,16 @@ def shapley(v: dict):
     # Compute Shapley values
     n_fact = factorial(n)
     w = [factorial(i) * factorial(n - i - 1) / n_fact for i in range(0, n)]
-    shap = {x: sum(w[len(other_xs)] * con              # weighted sum of contributions...
-                   for other_xs, con in cont.items())  # starting from each coalition of other features...
-            for x, cont in contrib.items()}            # for each feature
-    # Compute pairwise interaction values
+    shap = {x: sum(w[len(other_xs)] * cont[other_xs]  # weighted sum of contributions...
+                   for other_xs in cont)              # starting from each coalition of other features...
+            for x, cont in contrib.items()}           # for each feature x
+    # Compute pairwise interaction effects
     two_nm1_fact = 2 * factorial(n - 1)
     w_int = [factorial(i) * factorial(n - i - 2) / two_nm1_fact for i in range(0, n - 1)]
-    shap_int = {xi: {xj: sum(w_int[len(other_xs)] * (cont_j[other_xs | {xi}] - con_i)
-                             for other_xs, con_i in cont_i.items() if xj not in other_xs)
-                     for xj, cont_j in contrib.items() if xj != xi}
-                for xi, cont_i in contrib.items()}
+    shap_int = {xi: {xj: sum(w_int[len(other_xs)] * (cont_i[other_xs | {xj}] - cont_i[other_xs])  # weighted sum of increases in xi's contribution when xj is added
+                             for other_xs in cont_i if xj not in other_xs)                        # starting from each coalition of other features...
+                     for xj in contrib if xj != xi} for xi, cont_i in contrib.items()}            # for each pair of distinct features xi, xj
+    # Compute remaining effects
+    for x in contrib:
+        shap_int[x][x] = shap[x] - sum(shap_int[x].values())
     return shap, shap_int

@@ -108,8 +108,8 @@ def print_matrix(model, matrix):
         return s.rstrip("0") + " " * z
     with np.printoptions(formatter={"int": f"{{:>{len(str(int(np.nanmax(matrix))))}d}}".format,
                                     "float": float_formatter}):
-        for w, mat_w in zip(model.W.leaves, matrix.copy()):
-            print(w)
+        for i, (w, mat_w) in enumerate(zip(model.W.leaves, matrix.copy())):
+            print(f"{i}: {w}")
             for x, mat_w_x in zip(model.X.leaves, mat_w):
                 print("    ", mat_w_x, x)
 

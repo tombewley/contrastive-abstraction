@@ -31,13 +31,16 @@ class MarkovChains:
     @property
     def stationary(self):
         # Adapted from https://stackoverflow.com/a/58334399
-        evals, evecs = np.linalg.eig(np.swapaxes(self.conditional, 1, 2))
+        P = self.conditional.copy()
+        P[np.isnan(P)] = 0.
+        evals, evecs = np.linalg.eig(np.swapaxes(P, 1, 2))
         evec1 = np.swapaxes(evecs, 1, 2)[np.isclose(evals, 1)]
         return (evec1 / evec1.sum(axis=1, keepdims=True)).real
 
     @property
     def fundamental(self):
-        N_and_B = np.full_like(self.conditional, np.nan)
+        n, m, _ = self.conditional.shape
+        N_and_B = np.tile(np.expand_dims(np.identity(m), 0), (n, 1, 1))
         for i, P in enumerate(self.conditional):
             transient = ~np.isnan(P).any(axis=1)
             transient_idx = np.argwhere(transient).flatten()

@@ -65,9 +65,16 @@ class MarkovChains:
 
     def powerset_perturb(self, source: int, dest: int):
         m = len(self.states)
-        perturbed_conditional = np.repeat(self.conditional[source:source+1], 2**m, axis=0)
+        # NOTE: when one (and only one) of source and dest have NaNs on a row, always use the other one
+        source_nanfix, dest_nanfix = self.conditional[source].copy(), self.conditional[dest].copy()
+        source_isnan = np.isnan(source_nanfix).any(axis=1)
+        dest_isnan = np.isnan(dest_nanfix).any(axis=1)
+        source_nanfix[source_isnan] = dest_nanfix[source_isnan]
+        dest_nanfix[dest_isnan] = source_nanfix[dest_isnan]
+        perturbed_conditional = np.repeat(source_nanfix[None, :], 2**m, axis=0)
+        dest_nanfix = dest_nanfix[None, :]  # Needed for indexing with xs
         for i, xs in enumerate(powerset(range(m))):
-            perturbed_conditional[i, xs] = self.conditional[dest, xs]
+            perturbed_conditional[i, xs] = dest_nanfix[0, xs]
         return MarkovChains(states=self.states, array=perturbed_conditional)
 
     def show_graph(self, c):

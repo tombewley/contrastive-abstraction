@@ -34,7 +34,12 @@ class MarkovChains:
         P = self.conditional.copy()
         P[np.isnan(P)] = 0.
         evals, evecs = np.linalg.eig(np.swapaxes(P, 1, 2))
-        evec1 = np.swapaxes(evecs, 1, 2)[np.isclose(evals, 1)]
+        eval1 = np.isclose(evals, 1)
+        num_eval1 = eval1.sum(axis=1)
+        no_unique_eval1 = num_eval1 != 1
+        if no_unique_eval1.any():
+            raise ValueError(f"Chains {np.argwhere(no_unique_eval1).flatten()} have no unique stationary distribution")
+        evec1 = np.swapaxes(evecs, 1, 2)[eval1]
         return (evec1 / evec1.sum(axis=1, keepdims=True)).real
 
     @property

@@ -82,10 +82,12 @@ class MarkovChains:
         graph = nx.DiGraph()
         for i, x in enumerate(self.states):
             for j, xx in enumerate(self.states):
-                graph.add_edge(x, xx, counts=self.counts[:, i, j])
+                if self.conditional[c, i, j] > 0:
+                    graph.add_edge(x, xx, prob=self.conditional[c, i, j])
         pos = nx.spring_layout(graph)
-        width = [5 * ((d["counts"][c] / self.counts.max())**0.5) for _, _, d in graph.edges(data=True)]
-        nx.draw(graph, pos=pos, with_labels=True,
-                width=width,
+        # width = [5 * ((d["counts"][c] / self.counts.max())**0.5) for _, _, d in graph.edges(data=True)]
+        nx.draw(graph, pos=pos,
+                # width=width,
                 connectionstyle="arc3,rad=0.2"
                 )
+        nx.draw_networkx_labels(graph, pos=pos, labels={s: i + 1 for i, s in enumerate(self.states) if s in graph})
